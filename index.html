@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRCP 6(a) Deadline Calculator</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#5f5f58; --card:#fff; --line:#d8d6cc; --accent:#1f4e79; --warn:#8a5a00; --warnbg:#fff6e0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161614; --fg:#ecebe4; --muted:#a3a29a; --card:#1f1f1c; --line:#3a3935; --accent:#7fb2e0; --warn:#f0c36a; --warnbg:#2c2514; }
+  }
+  body { font:16px/1.5 Georgia, serif; background:var(--bg); color:var(--fg); margin:0; padding:24px 16px; }
+  main { max-width:680px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-weight:bold; margin:12px 0 4px; }
+  input[type=date], input[type=number], input[type=text], select { font:inherit; padding:8px; width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .check { display:flex; gap:8px; align-items:flex-start; font-weight:normal; }
+  .check input { margin-top:6px; }
+  button { font:inherit; margin-top:16px; padding:10px 18px; background:var(--accent); color:var(--bg); border:0; border-radius:6px; cursor:pointer; }
+  #result .big { font-size:1.6rem; font-weight:bold; }
+  .warn { background:var(--warnbg); color:var(--warn); border-left:4px solid var(--warn); padding:8px 12px; margin:12px 0; border-radius:4px; }
+  blockquote { margin:6px 0 6px 0; padding-left:12px; border-left:3px solid var(--line); color:var(--muted); font-size:.92rem; }
+  ol { padding-left:20px; }
+  small, .hint { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>FRCP 6(a) Deadline Calculator</h1>
+  <p class="sub">Federal Rules of Civil Procedure, Rule 6(a): computing time periods stated in days.</p>
+
+  <div class="warn" role="note">
+    <strong>Educational demo. Not legal advice.</strong> Verify every deadline against the current rule, the governing statute or order,
+    local rules, and the court's calendar before relying on it. The text of Rule 6(a)(5) and 6(a)(6) quoted below was
+    <em>not</em> verified against a live source when this tool was built.
+  </div>
+
+  <form class="card" id="form" autocomplete="off">
+    <label for="trigger">Trigger date (the day of the event that starts the period, e.g. date of service)</label>
+    <input type="date" id="trigger" required>
+
+    <label for="days">Number of days</label>
+    <input type="number" id="days" min="1" step="1" value="14" required>
+
+    <label for="dir">Direction</label>
+    <select id="dir">
+      <option value="after">After the event (e.g., respond within 21 days after service)</option>
+      <option value="before">Before the event (e.g., file 14 days before a hearing)</option>
+    </select>
+
+    <label class="check"><input type="checkbox" id="observed">
+      <span>Also treat the federal <em>observed</em> day as a legal holiday (holiday on a Saturday &rarr; Friday; on a Sunday &rarr; Monday, per 5 U.S.C. &sect; 6103(b)).
+      <span class="hint">Off by default: Rule 6(a)(6) refers to the day "set aside by statute".</span></span></label>
+
+    <label for="extra">Extra legal holidays (YYYY-MM-DD, comma-separated) <small>e.g., a presidential proclamation or, for periods counted after an event, a state holiday where the court sits</small></label>
+    <input type="text" id="extra" placeholder="2026-12-24, 2026-12-26">
+
+    <button type="submit">Calculate deadline</button>
+  </form>
+
+  <section class="card" id="result" aria-live="polite" hidden></section>
+
+  <section class="card">
+    <h2 style="margin-top:0;font-size:1.1rem">Rule language this tool relies on</h2>
+    <p><strong>6(a)(1)</strong> <small>(confirmed against published text)</small></p>
+    <blockquote>"(A) exclude the day of the event that triggers the period; (B) count every day, including intermediate Saturdays, Sundays, and legal holidays; and (C) include the last day of the period, but if the last day is a Saturday, Sunday, or legal holiday, the period continues to run until the end of the next day that is not a Saturday, Sunday, or legal holiday."</blockquote>
+    <p><strong>6(a)(5)</strong> <small>(from memory; unverified)</small></p>
+    <blockquote>"The 'next day' is determined by continuing to count forward when the period is measured after an event and backward when measured before an event."</blockquote>
+    <p><strong>6(a)(6)</strong> <small>(from memory; unverified)</small></p>
+    <blockquote>"'Legal holiday' means: (A) the day set aside by statute for observing New Year's Day, Martin Luther King Jr.'s Birthday, Washington's Birthday, Memorial Day, Juneteenth National Independence Day, Independence Day, Labor Day, Columbus Day, Veterans' Day, Thanksgiving Day, or Christmas Day; (B) any day declared a holiday by the President or Congress; and (C) for periods that are measured after an event, any other day declared a holiday by the state where the district court is located."</blockquote>
+    <p class="hint">Not handled: periods stated in hours (6(a)(2)), the last-day cutoff time (6(a)(4)), an inaccessible clerk's office (6(a)(3)), and the 3-day mail extension in Rule 6(d) (which, as of 2016, no longer applies to electronic service and has changed over time). Check those by hand.</p>
+  </section>
+</main>
+
+<script>
+/* ===== CORE-START: pure date logic (no DOM). Tested by test.js. ===== */
+var DAY_MS = 86400000;
+var HOLIDAY_NAMES = {};
+
+function parseISO(s) {                       // 'YYYY-MM-DD' -> UTC midnight ms; null if invalid
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
+  if (!m) return null;
+  var t = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  var d = new Date(t);
+  if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return null;
+  return t;
+}
+function iso(t) { return new Date(t).toISOString().slice(0, 10); }
+var WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function weekday(t) { return new Date(t).getUTCDay(); }
+
+function nthWeekday(y, month, wd, n) {       // month 0-11; n-th (1-based) weekday wd of month
+  var first = Date.UTC(y, month, 1);
+  var offset = (wd - weekday(first) + 7) % 7;
+  return first + (offset + 7 * (n - 1)) * DAY_MS;
+}
+function lastWeekday(y, month, wd) {
+  var last = Date.UTC(y, month + 1, 0);
+  return last - ((weekday(last) - wd + 7) % 7) * DAY_MS;
+}
+
+/* Rule 6(a)(6)(A): "the day set aside by statute for observing ..." (5 U.S.C. 6103(a)).
+   Returns [{t, name}] for calendar year y. Juneteenth: statutory since 2021. */
+function statutoryHolidays(y) {
+  var h = [
+    [Date.UTC(y, 0, 1), "New Year's Day"],
+    [nthWeekday(y, 0, 1, 3), "Birthday of Martin Luther King, Jr."],
+    [nthWeekday(y, 1, 1, 3), "Washington's Birthday"],
+    [lastWeekday(y, 4, 1), "Memorial Day"],
+    [Date.UTC(y, 6, 4), "Independence Day"],
+    [nthWeekday(y, 8, 1, 1), "Labor Day"],
+    [nthWeekday(y, 9, 1, 2), "Columbus Day"],
+    [Date.UTC(y, 10, 11), "Veterans Day"],
+    [nthWeekday(y, 10, 4, 4), "Thanksgiving Day"],
+    [Date.UTC(y, 11, 25), "Christmas Day"]
+  ];
+  if (y >= 2021) h.push([Date.UTC(y, 5, 19), "Juneteenth National Independence Day"]);
+  return h.map(function (x) { return { t: x[0], name: x[1] }; });
+}
+
+/* Builds a map 'YYYY-MM-DD' -> name for years y-1..y+1 (so a period spanning New Year's,
+   or a Jan 1 observed on Dec 31, is handled). */
+function holidayMap(y, observed, extra) {
+  var map = {};
+  for (var yy = y - 1; yy <= y + 1; yy++) {
+    statutoryHolidays(yy).forEach(function (h) {
+      map[iso(h.t)] = h.name;
+      if (observed) {                         // 5 U.S.C. 6103(b): Sat -> Fri, Sun -> Mon
+        var wd = weekday(h.t), fixed = /New Year|Independence Day|Veterans|Christmas|Juneteenth/.test(h.name);
+        if (fixed && wd === 6) map[iso(h.t - DAY_MS)] = h.name + " (observed)";
+        if (fixed && wd === 0) map[iso(h.t + DAY_MS)] = h.name + " (observed)";
+      }
+    });
+  }
+  (extra || []).forEach(function (d) { map[d] = "Additional legal holiday (6(a)(6)(B)/(C))"; });
+  return map;
+}
+
+/* opts: {trigger:'YYYY-MM-DD', days:int>=1, direction:'after'|'before', observed:bool, extra:['YYYY-MM-DD',...]} */
+function computeDeadline(opts) {
+  var t0 = parseISO(opts.trigger);
+  if (t0 === null) throw new Error("Trigger date is not a valid YYYY-MM-DD date.");
+  var n = opts.days;
+  if (!Number.isInteger(n) || n < 1) throw new Error("Days must be a whole number of at least 1.");
+  var dir = opts.direction === 'before' ? -1 : 1;          // 6(a)(5): count forward after, backward before
+  var extra = (opts.extra || []).map(function (s) {
+    if (parseISO(s) === null) throw new Error("Extra holiday '" + s + "' is not a valid YYYY-MM-DD date.");
+    return s;
+  });
+
+  // 6(a)(1)(A) exclude the trigger day; (B) count every day -> nominal last day is exactly n days away.
+  var nominal = t0 + dir * n * DAY_MS;
+  var hol = holidayMap(new Date(nominal).getUTCFullYear(), !!opts.observed, extra);
+
+  // 6(a)(1)(C) + 6(a)(5): if the last day is Sat/Sun/legal holiday, keep going to the next day that is not.
+  var t = nominal, skipped = [];
+  for (;;) {
+    var wd = weekday(t), why = null;
+    if (wd === 6) why = "Saturday";
+    else if (wd === 0) why = "Sunday";
+    else if (hol[iso(t)]) why = "legal holiday: " + hol[iso(t)];
+    if (!why) break;
+    skipped.push({ date: iso(t), weekday: WEEKDAYS[wd], reason: why });
+    t += dir * DAY_MS;
+  }
+  return { trigger: opts.trigger, days: n, direction: dir === 1 ? 'after' : 'before',
+           nominal: iso(nominal), nominalWeekday: WEEKDAYS[weekday(nominal)],
+           deadline: iso(t), deadlineWeekday: WEEKDAYS[weekday(t)], skipped: skipped };
+}
+/* ===== CORE-END ===== */
+
+/* ===== UI ===== */
+(function () {
+  if (typeof document === 'undefined') return;
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var out = $('result'); out.hidden = false;
+    try {
+      var extra = $('extra').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      var base = { trigger: $('trigger').value, days: parseInt($('days').value, 10), direction: $('dir').value, extra: extra };
+      var r = computeDeadline(Object.assign({ observed: $('observed').checked }, base));
+      var alt = computeDeadline(Object.assign({ observed: !$('observed').checked }, base));
+      var html = '<div class="hint">Deadline</div><div class="big">' + esc(r.deadlineWeekday) + ', ' + esc(r.deadline) + '</div>' +
+        '<p>Day ' + r.days + ' ' + r.direction + ' ' + esc(r.trigger) + ' (trigger day excluded) is <strong>' + esc(r.nominalWeekday) + ', ' + esc(r.nominal) + '</strong>.</p>';
+      if (r.skipped.length) {
+        html += '<p>Under Rule 6(a)(1)(C), the period "continues to run" ' + (r.direction === 'after' ? 'forward' : 'backward') + ' past:</p><ol>' +
+          r.skipped.map(function (s) { return '<li>' + esc(s.weekday) + ', ' + esc(s.date) + ' &mdash; ' + esc(s.reason) + '</li>'; }).join('') + '</ol>';
+      } else {
+        html += '<p>That day is not a Saturday, Sunday, or legal holiday, so no adjustment applies.</p>';
+      }
+      if (alt.deadline !== r.deadline) {
+        html += '<div class="warn"><strong>Sensitive to the "observed holiday" setting.</strong> With that setting ' +
+          ($('observed').checked ? 'off' : 'on') + ', the deadline would be ' + esc(alt.deadlineWeekday) + ', ' + esc(alt.deadline) +
+          '. When in doubt, use the earlier date.</div>';
+      }
+      out.innerHTML = html;
+    } catch (err) {
+      out.innerHTML = '<div class="warn">' + esc(err.message) + '</div>';
+    }
+  });
+})();
+</script>
+</body>
+</html>
